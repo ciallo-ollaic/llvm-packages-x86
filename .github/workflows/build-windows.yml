@@ -58,7 +58,7 @@ jobs:
                   SCCACHE_GHA_ENABLED: "true"
               run: |
                   for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VS_PATH=%%i
-                  call "%VS_PATH%\VC\Auxiliary\Build\vcvarsall.bat" arm64_x64
+                  call "%VS_PATH%\VC\Auxiliary\Build\vcvarsall.bat" arm64_x86
 
                   cmake -S "${{ github.workspace }}\llvm-project\llvm" -B build ^
                     -G Ninja ^
@@ -105,7 +105,7 @@ jobs:
             - name: Upload binaries
               uses: actions/upload-artifact@v5
               with:
-                  name: llvm-${{ steps.resolve.outputs.version }}-win64-msvc
+                  name: llvm-${{ steps.resolve.outputs.version }}-win32-msvc
                   path: install/
                   if-no-files-found: error
                   compression-level: 6
