@@ -52,6 +52,7 @@ jobs:
                   sparse-checkout: |
                       llvm
                       clang
+                      lld
                       lldb
                       cmake
                       third-party
@@ -73,7 +74,7 @@ jobs:
                     -DCMAKE_C_COMPILER_LAUNCHER="sccache" ^
                     -DCMAKE_CXX_COMPILER_LAUNCHER="sccache" ^
                     -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded" ^
-                    -DLLVM_ENABLE_PROJECTS="clang;lldb" ^
+                    -DLLVM_ENABLE_PROJECTS="clang;lldb;lld" ^
                     -DLLVM_TARGETS_TO_BUILD="X86" ^
                     -DLLDB_ENABLE_PYTHON=OFF ^
                     -DLLDB_INCLUDE_TESTS=OFF ^
@@ -98,7 +99,7 @@ jobs:
                   for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VS_PATH=%%i
                   call "%VS_PATH%\VC\Auxiliary\Build\vcvarsall.bat" arm64_x86
 
-                  cmake --build build --config "Release" --target lldb-server lldb clang --parallel
+                  cmake --build build --config "Release" --parallel
 
             - name: Install
               shell: pwsh
@@ -132,7 +133,6 @@ jobs:
                   lldb --version
                   if (-not $?) { throw "lldb --version failed" }
 
-                  if (-not (Test-Path "${installDir}\bin\lldb-server.exe")) {
-                    throw "lldb-server.exe not found"
-                  }
-                  Write-Host "lldb-server.exe exists at: ${installDir}\bin\lldb-server.exe"
+                  Write-Host "=== lld-link version ==="
+                  lld-link --version
+                  if (-not $?) { throw "lld-link --version failed" }
