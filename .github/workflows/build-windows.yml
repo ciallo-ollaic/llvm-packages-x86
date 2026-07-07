@@ -48,6 +48,13 @@ jobs:
                   repository: llvm/llvm-project
                   ref: ${{ steps.resolve.outputs.ref }}
                   path: llvm-project
+                  fetch-depth: 1
+                  sparse-checkout: |
+                      llvm
+                      clang
+                      lldb
+                      cmake
+                      third-party
 
             - name: Setup sccache
               uses: mozilla-actions/sccache-action@v0.0.10
