@@ -80,36 +80,35 @@ jobs:
             - name: Setup sccache
               uses: mozilla-actions/sccache-action@v0.0.10
 
-            - name: Configure CMake
+            - name: Setup MSVC environment
               shell: pwsh
-              env:
-                  SCCACHE_GHA_ENABLED: "true"
               run: |
-                  $srcDir = "${{ github.workspace }}\llvm-project"
-                  Write-Host "Configuring from: $srcDir"
+                  $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+                  if (-not $vsPath) { throw "Visual Studio installation not found" }
 
-                  cmake -S "${srcDir}\llvm" -B build `
-                    -G Ninja `
-                    -DCMAKE_BUILD_TYPE="Release" `
-                    -DCMAKE_C_COMPILER_LAUNCHER="sccache" `
-                    -DCMAKE_CXX_COMPILER_LAUNCHER="sccache" `
-                    -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded" `
-                    -DLLVM_ENABLE_PROJECTS="clang;lldb" `
-                    -DLLVM_TARGETS_TO_BUILD="X86" `
-                    -DLLDB_ENABLE_PYTHON=OFF `
-                    -DLLDB_INCLUDE_TESTS=OFF `
-                    -DLLVM_INCLUDE_TESTS=OFF `
-                    -DCLANG_INCLUDE_TESTS=OFF `
-                    -DLLVM_INCLUDE_EXAMPLES=OFF `
-                    -DLLVM_INCLUDE_DOCS=OFF `
-                    -DLLVM_INCLUDE_BENCHMARKS=OFF `
-                    -DLLVM_INCLUDE_UTILS=OFF `
-                    -DLLVM_INCLUDE_RUNTIMES=OFF `
-                    -DLLVM_PARALLEL_LINK_JOBS=1 `
-                    -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}\install" `
-                    -DCMAKE_EXE_LINKER_FLAGS="/MANIFEST:NO" `
-                    -DCMAKE_MODULE_LINKER_FLAGS="/MANIFEST:NO" `
-                    -DCMAKE_SHARED_LINKER_FLAGS="/MANIFEST:NO"
+                  $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+                  if (-not (Test-Path $vcvars)) { throw "vcvarsall.bat not found at $vcvars" }
+
+                  Write-Host "Found Visual Studio at: $vsPath"
+                  Write-Host "Extracting MSVC environment variables..."
+
+                  $originalPaths = $env:Path -split ";"
+
+                  $envLines = cmd.exe /c "call `"$vcvars`" arm64_x64 && set"
+                  $envLines | ForEach-Object {
+                      if ($_ -match "^([^=]+)=(.*)$") {
+                          $key = $Matches[1]
+                          $val = $Matches[2]
+                          if ($key -ieq "path") {
+                              $val -split ";" | Where-Object { $_ -and $_ -notin $originalPaths } | ForEach-Object {
+                                  $_ | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                              }
+                          } else {
+                              "$key=$val" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+                          }
+                      }
+                  }
+                  Write-Host "MSVC environment variables successfully registered!"
 
             - name: Build
               shell: pwsh
