@@ -1,0 +1,157 @@
+name: Build X86 LLVM
+
+on:
+    workflow_dispatch:
+        inputs:
+            ref:
+                description: "Git ref (tag, branch, or commit SHA) to build. Leave empty for latest release."
+                required: false
+                type: string
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        name: Build X86 LLVM
+        runs-on: windows-11-arm
+        timeout-minutes: 300
+
+        steps:
+            - name: Resolve source ref
+              id: resolve
+              shell: pwsh
+              env:
+                  INPUT_REF: ${{ inputs.ref }}
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  $ref = $env:INPUT_REF
+                  if (-not $ref) {
+                    Write-Host "No ref specified, fetching the latest release..."
+                    $headers = @{ "Accept" = "application/vnd.github+json" }
+                    if ($env:GH_TOKEN) {
+                      $headers.Add("Authorization", "Bearer $env:GH_TOKEN")
+                    }
+                    $response = Invoke-RestMethod -Uri "https://api.github.com/repos/llvm/llvm-project/releases/latest" -Headers $headers
+                    $ref = $response.tag_name
+                  }
+
+                  $version = $ref -replace '^llvmorg-', ''
+
+                  "ref=$ref" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+                  "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+                  Write-Host "Selected ref: $ref, version: $version"
+
+            - name: Checkout source
+              uses: actions/checkout@v7
+              with:
+                  repository: llvm/llvm-project
+                  ref: ${{ steps.resolve.outputs.ref }}
+                  path: llvm-project
+
+            - name: Setup MSVC environment
+              shell: pwsh
+              run: |
+                  $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+                  if (-not $vsPath) { throw "Visual Studio installation not found" }
+
+                  $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+                  if (-not (Test-Path $vcvars)) { throw "vcvarsall.bat not found at $vcvars" }
+
+                  Write-Host "Found Visual Studio at: $vsPath"
+                  Write-Host "Extracting MSVC environment variables..."
+
+                  $envLines = cmd.exe /c "call `"$vcvars`" arm64_x64 && set"
+                  $envLines | ForEach-Object {
+                      if ($_ -match "^([^=]+)=(.*)$") {
+                          $key = $Matches[1]
+                          $val = $Matches[2]
+                          if ($key -ieq "path") {
+                              $val -split ";" | Where-Object { $_ } | ForEach-Object {
+                                  $_ | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                              }
+                          } else {
+                              "$key=$val" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+                          }
+                      }
+                  }
+                  Write-Host "MSVC environment variables successfully registered natively!"
+
+            - name: Setup sccache
+              uses: mozilla-actions/sccache-action@v0.0.10
+
+            - name: Configure CMake
+              shell: pwsh
+              env:
+                  SCCACHE_GHA_ENABLED: "true"
+              run: |
+                  $srcDir = "${{ github.workspace }}\llvm-project"
+                  Write-Host "Configuring from: $srcDir"
+
+                  cmake -S "${srcDir}\llvm" -B build `
+                    -G Ninja `
+                    -DCMAKE_BUILD_TYPE="Release" `
+                    -DCMAKE_C_COMPILER_LAUNCHER="sccache" `
+                    -DCMAKE_CXX_COMPILER_LAUNCHER="sccache" `
+                    -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded" `
+                    -DLLVM_ENABLE_PROJECTS="clang;lldb" `
+                    -DLLVM_TARGETS_TO_BUILD="X86" `
+                    -DLLDB_ENABLE_PYTHON=OFF `
+                    -DLLDB_INCLUDE_TESTS=OFF `
+                    -DLLVM_INCLUDE_TESTS=OFF `
+                    -DCLANG_INCLUDE_TESTS=OFF `
+                    -DLLVM_INCLUDE_EXAMPLES=OFF `
+                    -DLLVM_INCLUDE_DOCS=OFF `
+                    -DLLVM_INCLUDE_BENCHMARKS=OFF `
+                    -DLLVM_INCLUDE_UTILS=OFF `
+                    -DLLVM_INCLUDE_RUNTIMES=OFF `
+                    -DLLVM_PARALLEL_LINK_JOBS=1 `
+                    -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}\install" `
+                    -DCMAKE_EXE_LINKER_FLAGS="/MANIFEST:NO" `
+                    -DCMAKE_MODULE_LINKER_FLAGS="/MANIFEST:NO" `
+                    -DCMAKE_SHARED_LINKER_FLAGS="/MANIFEST:NO"
+
+            - name: Build
+              shell: pwsh
+              env:
+                  SCCACHE_GHA_ENABLED: "true"
+              run: |
+                  cmake --build build --config "Release" `
+                    --target lldb-server lldb clang --parallel
+
+            - name: Install
+              shell: pwsh
+              run: |
+                  cmake --install build --config "Release"
+                  Write-Host "Contents of install directory:"
+                  Get-ChildItem -Recurse "${{ github.workspace }}\install" `
+                    | Where-Object { -not $_.PSIsContainer } `
+                    | Select-Object FullName, Length
+
+            - name: Upload binaries
+              uses: actions/upload-artifact@v5
+              with:
+                  name: llvm-${{ steps.resolve.outputs.version }}-win64-msvc
+                  path: install/
+                  if-no-files-found: error
+                  compression-level: 6
+                  retention-days: 14
+
+            - name: Smoke test
+              shell: pwsh
+              run: |
+                  $installDir = "${{ github.workspace }}\install"
+                  $env:Path = "${installDir}\bin;${env:Path}"
+
+                  Write-Host "=== clang version ==="
+                  clang --version
+                  if (-not $?) { throw "clang --version failed" }
+
+                  Write-Host "=== lldb version ==="
+                  lldb --version
+                  if (-not $?) { throw "lldb --version failed" }
+
+                  if (-not (Test-Path "${installDir}\bin\lldb-server.exe")) {
+                    throw "lldb-server.exe not found"
+                  }
+                  Write-Host "lldb-server.exe exists at: ${installDir}\bin\lldb-server.exe"
