@@ -42,6 +42,12 @@ jobs:
                   "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
                   Write-Host "Selected ref: $ref, version: $version"
 
+            - name: Cache LLVM Source
+              uses: actions/cache@v5
+              with:
+                path: llvm-project
+                key: llvm-source-${{ steps.resolve.outputs.ref }}-v1
+
             - name: Checkout source
               uses: actions/checkout@v7
               with:
@@ -50,11 +56,12 @@ jobs:
                   path: llvm-project
                   fetch-depth: 1
                   sparse-checkout: |
-                      llvm
                       clang
+                      cmake
+                      libunwind
                       lld
                       lldb
-                      cmake
+                      llvm
                       third-party
 
             - name: Setup sccache
